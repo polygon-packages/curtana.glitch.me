@@ -5,6 +5,7 @@ import json
 import shutil
 import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 from telethon.extensions import html
 from git import Repo, Actor, GitCommandError
 from jinja2 import Environment, FileSystemLoader
@@ -18,9 +19,12 @@ DEFAULT_DATA = {
     "git": None,
 }
 DATA = db.get(NAME) or db.add(name=NAME, value=DEFAULT_DATA)
-CWD = Path(DATA["git"].split("/")[-1])
-GLITCH_FOLDER = Path(__file__).parent / "glitch"
-DOMAIN = f"{CWD}.glitch.me"
+GIT_URL = urlparse(DATA["git"])
+APP_NAME = Path(GIT_URL.path).stem # Path(DATA["git"].split("/")[-1])
+CWD = Path(__file__).parent
+TARGET_DIRECTORY = CWD / APP_NAME
+GLITCH_FOLDER = CWD / "glitch"
+DOMAIN = f"{APP_NAME}.glitch.me"
 DATE = datetime.date.today().strftime("%B %d, %Y")
 
 
@@ -40,12 +44,12 @@ async def glitch(e):
         + f"\nUpdates chat(s): {DATA['chats']}"
         + f"\nEvent chat: @{e.sender.username}"
     )
-    if CWD.exists():
-        shutil.rmtree(CWD)
+    if TARGET_DIRECTORY.exists():
+        shutil.rmtree(TARGET_DIRECTORY)
     glitch_repository = clone_from_glitch(DATA["git"])
     titles = {key: [] for key in DATA["item_types"]}
     for i in titles:
-        Path.mkdir(CWD / i, exist_ok=True)
+        Path.mkdir(TARGET_DIRECTORY / i, exist_ok=True)
     for chat in DATA["chats"]:
         async for msg in polygon.iter_messages(chat):
             content = msg.message or "#"
@@ -63,7 +67,7 @@ async def glitch(e):
                     str.lower, content_list
                 ):
                     content_list.append(title)
-                    path = CWD / content_type / lower_title
+                    path = TARGET_DIRECTORY / content_type / lower_title
                     path.mkdir(exist_ok=True)
                     banner = await get_banner(msg, path)
                     html_content = html.unparse(content, msg.entities)
@@ -129,7 +133,7 @@ def write_webpage(path: Path, title=None, **variables) -> None:
         jinja2_template = open(GLITCH_FOLDER / "template.html", "r").read()
     else:
         jinja2_template = open(path, "r").read()
-        path = CWD / path.name
+        path = TARGET_DIRECTORY / path.name
     template_object = Environment(loader=FileSystemLoader(GLITCH_FOLDER)).from_string(
         jinja2_template
     )
@@ -137,20 +141,30 @@ def write_webpage(path: Path, title=None, **variables) -> None:
         f.write(template_object.render(**variables))
 
 
+def clone_using_shell(git_url, path: Path) -> Repo:
+    if path.exists():
+        shutil.rmtree(path)
+    shell_output = polygon.shell(f"git clone -v {git_url} {path}")
+    polygon.log(shell_output)
+    return Repo(path)
+
 def clone_from_glitch(git_url) -> Repo:
-    repo = Repo.clone_from(git_url, CWD)
+    # GitPython can't clone from glitch anymore for some reason
+    # repo = Repo.clone_from(git_url, TARGET_DIRECTORY)
+    repo = clone_using_shell(git_url, TARGET_DIRECTORY)
+    
     try:
         repo.head.reset("HEAD~1", index=True, working_tree=True)
     except GitCommandError:
         polygon.log("clone: On root commit.")
     for i in Path(GLITCH_FOLDER).glob("*"):
         if i.is_dir():
-            shutil.copytree(i, f"{CWD}/{i.stem}", dirs_exist_ok=True)
+            shutil.copytree(i, TARGET_DIRECTORY / i.stem, dirs_exist_ok=True)
     return repo
 
 
 def push_to_glitch(repo: Repo) -> None:
-    actor = Actor(f"Glitch ({CWD})", "none")
+    actor = Actor(f"Glitch ({APP_NAME})", "none")
     origin = repo.remote()
     index = repo.index
     index.add("*")
